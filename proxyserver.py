@@ -14,49 +14,25 @@ class ThreadedSocksServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 class Socks5Handler(socketserver.BaseRequestHandler):
     def handle(self):
 
-        # client greeting
-        header = self.request.recv(2)
-        version, nmethods = struct.unpack("!BB", header)
-
-        assert version == SOCKS_VERSION
-        assert nmethods > 0
-
-        methods_bytes = self.request.recv(nmethods)
-        methods = []
-        # unpack one byte at a time
-        for i in range(nmethods):
-            method,  = struct.unpack("!B", methods_bytes[i:i+1])
-            methods.append(method)
-
-        print(methods)
-
-        chosen_method = 2
+        methods = self.client_greeting()
 
         # server choice
+        chosen_method = 2
         self.request.sendall(struct.pack("!BB", SOCKS_VERSION, chosen_method))
 
-        # RFC1929 client auth
-        ver, ulen = struct.unpack("!BB", self.request.recv(2))
-
-        assert ver == 1
-        assert 0 < ulen < 256
-
-        uname = self.request.recv(ulen)
-        plen, = struct.unpack("!B", self.request.recv(1))
-        passwd = self.request.recv(plen)
-        print(uname, passwd)
-        self.request.sendall(struct.pack("!BB", ver, 0))
+        # client authentication
+        username, password = self.client_auth()
+        self.request.sendall(struct.pack("!BB", 1, 0))
 
         # client request
         print("waiting for client request")
         ver, cmd, rsv, address_type = struct.unpack("!BBBB", self.request.recv(4))
-        print(ver, cmd, rsv, address_type)
         assert ver == SOCKS_VERSION
 
         if address_type == 1:       # IPv4
             destination_address = socket.inet_ntop(socket.AF_INET, self.request.recv(4))
         elif address_type == 3:     # FQDN
-            FQDN_length = struct.unpack("!B", self.request.recv(1))
+            FQDN_length, = struct.unpack("!B", self.request.recv(1))
             FQDN = self.request.recv(FQDN_length)
             # TODO: use getadrinfo() to support IPv6
             destination_address = socket.gethostbyname(FQDN)    # IPv4 only
@@ -89,6 +65,35 @@ class Socks5Handler(socketserver.BaseRequestHandler):
 
         # server reply
 
+    def client_greeting(self):
+        header = self.request.recv(2)
+        version, nmethods = struct.unpack("!BB", header)
+
+        assert version == SOCKS_VERSION
+        assert nmethods > 0
+
+        methods_bytes = self.request.recv(nmethods)
+        methods = []
+        # unpack one byte at a time
+        for i in range(nmethods):
+            method,  = struct.unpack("!B", methods_bytes[i:i+1])
+            methods.append(method)
+
+        return methods
+
+    def client_auth(self):
+        # RFC1929 client auth
+        version, username_len = struct.unpack("!BB", self.request.recv(2))
+
+        assert version == 1
+        assert 0 < username_len < 256
+
+        username = self.request.recv(username_len)
+        password_len, = struct.unpack("!B", self.request.recv(1))
+        passwd = self.request.recv(password_len)
+
+        return username, passwd
+
 
     def relay_tcp(self, local_sock, remote_sock):
         while True:
@@ -111,6 +116,7 @@ class Socks5Handler(socketserver.BaseRequestHandler):
                     local_sock.sendall(data)
                 except:
                     break
+
         local_sock.close()
         remote_sock.close()
 
