@@ -17,7 +17,7 @@ class Socks5Handler(socketserver.BaseRequestHandler):
         methods = self.client_greeting()
 
         # server choice
-        print(f"methods: {methods}")
+        logging.debug(f"client methods: {methods}")
         if 2 in methods:
             chosen_method = 2
         else:
@@ -31,35 +31,18 @@ class Socks5Handler(socketserver.BaseRequestHandler):
             self.request.sendall(struct.pack("!BB", 1, 0))
 
         # client request
-        print("waiting for client request")
-        ver, cmd, rsv, address_type = struct.unpack("!BBBB", self.request.recv(4))
-        assert ver == SOCKS_VERSION
+        cmd, destination_address, destination_port = self.client_request()
 
-        if address_type == 1:       # IPv4
-            destination_address = socket.inet_ntop(socket.AF_INET, self.request.recv(4))
-        elif address_type == 3:     # FQDN
-            FQDN_length, = struct.unpack("!B", self.request.recv(1))
-            FQDN = self.request.recv(FQDN_length)
-            # TODO: use getadrinfo() to support IPv6
-            destination_address = socket.gethostbyname(FQDN)    # IPv4 only
-        elif address_type == 4:     # IPv6
-            destination_address = socket.inet_ntop(socket.AF_INET6, self.request.recv(16))
-        else:
-            print("error")
-
-        destination_port, = struct.unpack("!H", self.request.recv(2))
-        print(destination_address, destination_port)
-
-        # connect to remote
         if cmd == 1:        # TCP CONNECT
             try:
                 remote_sock = socket.create_connection((destination_address, destination_port))
+                logging.info(f"connecting to {destination_address}, {destination_port}")
             except OSError as e:
-                print(e.strerror)
+                logging.error(e.strerror)
 
             # TODO: support IPv6
             server_ip, server_port = remote_sock.getsockname()
-            print(f"server_ip: {server_ip}, port: {server_port}")
+            logging.debug(f"server_ip: {server_ip}, port: {server_port}")
             self.request.sendall(struct.pack("!BBBB", SOCKS_VERSION, 0, 0, 1) + socket.inet_aton(server_ip) + struct.pack("!H", server_port))
             self.relay_tcp(self.request, remote_sock)
         elif cmd == 2:      # BIND
@@ -67,8 +50,7 @@ class Socks5Handler(socketserver.BaseRequestHandler):
         elif cmd == 3:      # UDP ASSOCIATE
             pass
         else:
-            print("error")
-
+            logging.error("unsupported CMD")
         # server reply
 
     def client_greeting(self):
@@ -93,7 +75,6 @@ class Socks5Handler(socketserver.BaseRequestHandler):
 
         assert version == 1
         assert 0 < username_len < 256
-        print(f"username len: {username_len}")
 
         username = self.request.recv(username_len)
         password_len, = struct.unpack("!B", self.request.recv(1))
@@ -101,6 +82,25 @@ class Socks5Handler(socketserver.BaseRequestHandler):
 
         return username, passwd
 
+    def client_request(self):
+        ver, cmd, rsv, address_type = struct.unpack("!BBBB", self.request.recv(4))
+        assert ver == SOCKS_VERSION
+
+        if address_type == 1:       # IPv4
+            destination_address = socket.inet_ntop(socket.AF_INET, self.request.recv(4))
+        elif address_type == 3:     # FQDN
+            FQDN_length, = struct.unpack("!B", self.request.recv(1))
+            FQDN = self.request.recv(FQDN_length)
+            # TODO: use getadrinfo() to support IPv6
+            destination_address = socket.gethostbyname(FQDN)    # IPv4 only
+        elif address_type == 4:     # IPv6
+            destination_address = socket.inet_ntop(socket.AF_INET6, self.request.recv(16))
+        else:
+            logging.error("unsupported address type")
+
+        destination_port, = struct.unpack("!H", self.request.recv(2))
+
+        return cmd, destination_address, destination_port
 
     def relay_tcp(self, local_sock, remote_sock):
         while True:
@@ -108,7 +108,7 @@ class Socks5Handler(socketserver.BaseRequestHandler):
 
             if local_sock in readable:
                 data = local_sock.recv(4096)
-                if len(data) == 0:
+                if not data:
                     break
                 try:
                     remote_sock.sendall(data)
@@ -117,7 +117,7 @@ class Socks5Handler(socketserver.BaseRequestHandler):
 
             if remote_sock in readable:
                 data = remote_sock.recv(4096)
-                if len(data) == 0:
+                if not data:
                     break
                 try:
                     local_sock.sendall(data)
