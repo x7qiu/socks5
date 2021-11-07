@@ -17,12 +17,18 @@ class Socks5Handler(socketserver.BaseRequestHandler):
         methods = self.client_greeting()
 
         # server choice
-        chosen_method = 2
+        print(f"methods: {methods}")
+        if 2 in methods:
+            chosen_method = 2
+        else:
+            chosen_method = 0
+
         self.request.sendall(struct.pack("!BB", SOCKS_VERSION, chosen_method))
 
         # client authentication
-        username, password = self.client_auth()
-        self.request.sendall(struct.pack("!BB", 1, 0))
+        if chosen_method == 2:
+            username, password = self.client_auth()
+            self.request.sendall(struct.pack("!BB", 1, 0))
 
         # client request
         print("waiting for client request")
@@ -87,6 +93,7 @@ class Socks5Handler(socketserver.BaseRequestHandler):
 
         assert version == 1
         assert 0 < username_len < 256
+        print(f"username len: {username_len}")
 
         username = self.request.recv(username_len)
         password_len, = struct.unpack("!B", self.request.recv(1))
